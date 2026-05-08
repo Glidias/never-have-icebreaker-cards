@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Never Have I Ever: Card Edition</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    :root { --bg: #1a1a2e; --card: #16213e; --accent: #e94560; --text: #eaeaea; }
+    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; text-align: center; }
+    .container { max-width: 800px; margin: 0 auto; }
+    input, button { padding: 10px; margin: 5px; border-radius: 6px; border: none; font-size: 16px; }
+    button { background: var(--accent); color: white; cursor: pointer; font-weight: bold; }
+    button:hover { opacity: 0.9; }
+    button:disabled { background: #555; cursor: not-allowed; }
+    .room { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 20px; }
+    .card { background: var(--card); padding: 15px; border-radius: 10px; margin: 10px; display: inline-block; width: 200px; min-height: 100px; box-shadow: 0 4px 8px rgba(0,0,0,0.3); cursor: pointer; transition: transform 0.2s; border: 2px solid transparent; }
+    .card:hover { transform: translateY(-5px); border-color: var(--accent); }
+    .card.selected { border-color: #4caf50; background: #1e3a2f; }
+    .players { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 15px 0; }
+    .player { background: #222; padding: 8px 12px; border-radius: 20px; font-size: 14px; }
+    .player.active { border: 2px solid var(--accent); }
+    #status { margin: 15px 0; padding: 10px; background: #222; border-radius: 8px; min-height: 40px; }
+    #timer { color: #ffcc00; font-weight: bold; }
+    .hidden { display: none !important; }
+    .log { font-size: 13px; color: #aaa; margin-top: 10px; text-align: left; }
+    .host-badge { font-size: 11px; background: #e94560; padding: 2px 6px; border-radius: 10px; margin-left: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🃏 Never Have I Ever: Cards</h1>
+
+    <div id="login">
+      <input type="text" id="nameInput" placeholder="Your nickname" maxlength="15">
+      <button onclick="createRoom()">Create Room</button>
+      <button onclick="joinRoomPrompt()">Join Room</button>
+    </div>
+
+    <div id="lobby" class="hidden">
+      <h3>Room Code: <span id="roomCode"></span></h3>
+      <div class="players" id="lobbyPlayers"></div>
+      <button id="startBtn" onclick="startGame()" disabled>Start Game (2+ players)</button>
+      <p id="waitingMsg" class="hidden" style="color:#aaa; font-size:14px;">Waiting for the host to start...</p>
+    </div>
+
+    <div id="game" class="hidden">
+      <div id="status">Waiting...</div>
+      <div id="timer"></div>
+
+      <h3>🎯 Your Hand</h3>
+      <div id="hand"></div>
+
+      <div style="margin: 15px 0;">
+        <button id="playBtn" onclick="playSelected()" disabled>Play Selected</button>
+        <button id="replaceBtn" onclick="replaceCard()" disabled>🔄 Replace Selected Card</button>
+      </div>
+
+      <h3>📜 Current Card</h3>
+      <div id="currentCardDisplay" class="card" style="background: #2a2a40; cursor: default;"></div>
+
+      <h3>👥 Players</h3>
+      <div class="players" id="gamePlayers"></div>
+
+      <div id="responseArea" class="hidden">
+        <h3>Have you ever...?</h3>
+        <button onclick="submitResponse(true)">✅ I HAVE</button>
+        <button onclick="submitResponse(false)">❌ NEVER HAVE</button>
+      </div>
+    </div>
+
+    <div id="log" class="log"></div>
+  </div>
+
+  <script>
+    const socket = io();
+    let roomId = null;
+    let myId = null;
+    let isHost = false;
+    let selectedCard = null;
+    let responseTimer = null;
+
+    function log(msg) {
+      const el = document.getElementById('log');
+      el.innerHTML = `> ${msg}<br>` + el.innerHTML;
+    }
+
+    function createRoom() {
+      const name = document.getElementById('nameInput').value.trim();
+      if (!name) return alert('Enter a nickname');
+      socket.emit('createRoom', name);
+    }
+
+    function joinRoomPrompt() {
+      const raw = prompt('Enter room code:');
+      if (raw === null || raw.trim() === '') return; // user cancelled or left blank
+      const code = raw.trim().toUpperCase();
+      const name = document.getElementById('nameInput').value.trim();
+      if (!name) return alert('Enter a nickname');
+      socket.emit('joinRoom', { roomId: code, playerName: name });
+    }
+
+    socket.on('joined', ({ roomId: rid, playerId, isHost: host }) => {
+      roomId = rid;
+      myId = playerId;
+      isHost = host;
+      document.getElementById('login').classList.add('hidden');
+      document.getElementById('lobby').classList.remove('hidden');
+      document.getElementById('roomCode').textContent = rid;
+      document.getElementById('startBtn').classList.toggle('hidden', !isHost);
+      document.getElementById('waitingMsg').classList.toggle('hidden', isHost);
+      log('Connected to room');
+    });
+
+    socket.on('roomUpdate', (state) => {
+      const el = document.getElementById('lobbyPlayers');
+      el.innerHTML = state.players.map(p => {
+        const hostBadge = p.id === state.hostId ? '<span class="host-badge">HOST</span>' : '';
+        return `<div class="player">${p.name}${hostBadge} ${p.id === myId ? '(You)' : ''}</div>`;
+      }).join('');
+      // Only the host sees the start button enabled
+      if (isHost) document.getElementById('startBtn').disabled = state.players.length < 2;
+    });
+
+    function startGame() { socket.emit('startGame'); }
+
+    socket.on('gameStarted', (state) => {
+      document.getElementById('lobby').classList.add('hidden');
+      renderGame(state);
+      log('Game started!');
+    });
+
+    socket.on('cardPlayed', (data) => {
+      renderGame(data.roomState);
+      document.getElementById('currentCardDisplay').textContent = `Never have I ever... "${data.card}"`;
+      startResponseTimer(12);
+      log('Card played! Respond if applicable.');
+    });
+
+    socket.on('responseRecorded', () => {
+      log('Response recorded.');
+    });
+
+    socket.on('cardReplaced', (data) => {
+      renderGame(data.roomState);
+      log('Card replaced.');
+    });
+
+    socket.on('turnResolved', (state) => {
+      clearInterval(responseTimer);
+      document.getElementById('timer').textContent = '';
+      document.getElementById('currentCardDisplay').textContent = '';
+      renderGame(state);
+      log('Turn resolved.');
+    });
+
+    socket.on('gameEnded', ({ winnerId, roomState }) => {
+      clearInterval(responseTimer);
+      document.getElementById('timer').textContent = '';
+      const winner = roomState.players.find(p => p.id === winnerId);
+      document.getElementById('status').innerHTML = `🏆 <b>${winner?.name || 'Someone'}</b> got rid of all cards and wins!`;
+      document.getElementById('responseArea').classList.add('hidden');
+      document.getElementById('playBtn').disabled = true;
+      document.getElementById('replaceBtn').disabled = true;
+    });
+
+    socket.on('error', (msg) => alert(msg));
+
+    function renderGame(state) {
+      document.getElementById('game').classList.remove('hidden');
+      const me = state.players.find(p => p.id === myId);
+      if (!me) return;
+
+      // Render own hand
+      const handEl = document.getElementById('hand');
+      handEl.innerHTML = '';
+      (me.hand || []).forEach(card => {
+        const div = document.createElement('div');
+        div.className = `card ${selectedCard === card ? 'selected' : ''}`;
+        div.textContent = card;
+        div.onclick = () => { selectedCard = card; renderGame(state); };
+        handEl.appendChild(div);
+      });
+
+      // Render player list using handCount (server never sends other players' hands)
+      const playersEl = document.getElementById('gamePlayers');
+      playersEl.innerHTML = state.players.map(p => {
+        const isActive = p.id === state.currentPlayerId;
+        return `<div class="player ${isActive ? 'active' : ''}">${p.name} ${isActive ? '🎮' : ''} [${p.handCount} cards]</div>`;
+      }).join('');
+
+      const isMyTurn = state.currentPlayerId === myId;
+      document.getElementById('playBtn').disabled = state.phase !== 'playing' || !isMyTurn || !selectedCard;
+      document.getElementById('replaceBtn').disabled = state.phase !== 'playing' || !isMyTurn || me.hasReplaced || !selectedCard;
+      document.getElementById('responseArea').classList.toggle('hidden', state.phase !== 'responding' || isMyTurn);
+
+      // Contextual status message
+      if (state.phase === 'playing') {
+        const activePlayer = state.players.find(p => p.id === state.currentPlayerId);
+        document.getElementById('status').textContent = isMyTurn
+          ? 'Your turn — select and play a card.'
+          : `Waiting for ${activePlayer?.name || 'someone'} to play...`;
+      } else if (state.phase === 'responding') {
+        document.getElementById('status').textContent = isMyTurn
+          ? 'Waiting for everyone to respond...'
+          : 'Have you ever done this?';
+      }
+    }
+
+    function playSelected() {
+      if (!selectedCard) return;
+      socket.emit('playCard', selectedCard);
+      selectedCard = null;
+    }
+
+    function submitResponse(hasDone) {
+      socket.emit('respond', hasDone);
+      document.getElementById('responseArea').classList.add('hidden');
+      log(`You said: ${hasDone ? 'I HAVE' : 'NEVER HAVE'}`);
+    }
+
+    function replaceCard() {
+      if (!selectedCard) return;
+      socket.emit('replaceCard', selectedCard); // send the specific card to replace
+      selectedCard = null;
+    }
+
+    function startResponseTimer(seconds) {
+      clearInterval(responseTimer);
+      let t = seconds;
+      document.getElementById('timer').textContent = `⏱️ ${t}s left`;
+      responseTimer = setInterval(() => {
+        t--;
+        document.getElementById('timer').textContent = `⏱️ ${t}s left`;
+        if (t <= 0) clearInterval(responseTimer);
+      }, 1000);
+    }
+  </script>
+</body>
+</html>
