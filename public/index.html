@@ -119,7 +119,11 @@
         const hostBadge = p.id === state.hostId ? '<span class="host-badge">HOST</span>' : '';
         return `<div class="player">${p.name}${hostBadge} ${p.id === myId ? '(You)' : ''}</div>`;
       }).join('');
-      // Only the host sees the start button enabled
+
+      // Recompute host status in case it transferred to us
+      isHost = state.hostId === myId;
+      document.getElementById('startBtn').classList.toggle('hidden', !isHost);
+      document.getElementById('waitingMsg').classList.toggle('hidden', isHost);
       if (isHost) document.getElementById('startBtn').disabled = state.players.length < 2;
     });
 
