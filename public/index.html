@@ -23,7 +23,7 @@
     #status { margin: 15px 0; padding: 10px; background: #222; border-radius: 8px; min-height: 40px; }
     #timer { color: #ffcc00; font-weight: bold; }
     .hidden { display: none !important; }
-    .log { font-size: 13px; color: #aaa; margin-top: 10px; text-align: left; }
+    .log { font-size: 13px; color: #aaa; margin-top: 10px; text-align: left; max-height: 150px; overflow-y: auto; }
     .host-badge { font-size: 11px; background: #e94560; padding: 2px 6px; border-radius: 10px; margin-left: 4px; }
   </style>
 </head>
@@ -63,7 +63,8 @@
       <div class="players" id="gamePlayers"></div>
 
       <div id="responseArea" class="hidden">
-        <h3>Have you ever...?</h3>
+        <h3>Never have I ever... "<span id="responseCardText"></span>"</h3>
+        <p style="color:#aaa; font-size:14px; margin: 4px 0 12px;">Have you ever done this?</p>
         <button onclick="submitResponse(true)">✅ I HAVE</button>
         <button onclick="submitResponse(false)">❌ NEVER HAVE</button>
       </div>
@@ -133,6 +134,7 @@
     socket.on('cardPlayed', (data) => {
       renderGame(data.roomState);
       document.getElementById('currentCardDisplay').textContent = `Never have I ever... "${data.card}"`;
+      document.getElementById('responseCardText').textContent = data.card;
       startResponseTimer(12);
       log('Card played! Respond if applicable.');
     });
