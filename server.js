@@ -403,8 +403,12 @@ io.on('connection', (socket) => {
     const [oldCard] = player.hand.splice(cardIndex, 1);
     player.hand.push(newCard);
     room.discard.push(oldCard);
-    player.hasReplaced = true;
-    emitToRoom(currentRoom, 'cardReplaced', pid => ({ roomState: getRoomState(currentRoom, pid) }));
+
+    // Replacing costs your turn — advance immediately without playing a card
+    room.currentPlayerIndex = (room.currentPlayerIndex + 1) % room.players.length;
+    room.players.forEach(p => p.hasReplaced = false);
+    room.phase = 'playing';
+    emitToRoom(currentRoom, 'turnResolved', pid => ({ ...getRoomState(currentRoom, pid), skippedByReplace: true }));
   });
 
   socket.on('disconnect', () => {
